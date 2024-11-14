@@ -1,0 +1,218 @@
+---
+title: "p8105_hw5_mz3084"
+author: "Meitong Zhou"
+date: "2024-11-12"
+output: github_document
+---
+```{r}
+library(tidyverse)
+```
+### Q1
+```{r}
+birthday_function = function(n) {
+  birthdays = sample(1:365, n, replace = TRUE)
+  any(duplicated(birthdays))
+}
+```
+
+```{r}
+# check the function with a 10 people group.
+birthday_function(10)
+```
+
+```{r}
+# check the function with a 40 people group.
+birthday_function(40)
+```
+
+
+```{r}
+set.seed(1)  # Set a seed for reproducibility
+num_simulations = 10000  # Number of simulations per group size
+group_sizes = 2:50  # Range of group sizes to test
+
+results = sapply(group_sizes, function(n) {
+  mean(replicate(num_simulations, birthday_function(n)))
+})
+results_df = data.frame(group_size = group_sizes, probability = results)
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(results_df, aes(x = group_size, y = probability)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red") +
+  labs(
+    title = "Probability of at least two people sharing a birthday",
+    x = "Group Size",
+    y = "Probability"
+  ) +
+  theme_minimal()
+```
+
+The resulting plot will show that
+ 1. For small group sizes, the probability is low.
+ 2. Around a group size of 23, the probability reaches approximately 50%. This is known as the “birthday paradox,” where a relatively small group has a surprisingly high chance of a shared birthday.
+ 3. As the group size approaches 50, the probability becomes very close to 1, indicating that it’s almost certain that at least two people in the room share a birthday.
+
+
+### Q2
+```{r}
+library(broom)
+```
+
+
+```{r}
+n = 30        # sample size
+sigma = 5     # standard deviation
+alpha = 0.05  # significance level
+mu_values = c(0, 1, 2, 3, 4, 5, 6)  # different values of true mean
+
+# Initialize lists to store results
+results = list()
+```
+
+
+```{r}
+for (mu in mu_values) {
+  simulations = replicate(5000, rnorm(n, mean = mu, sd = sigma), simplify = FALSE)
+  
+  #t-test
+  test_results = lapply(simulations, function(x) {
+    test = t.test(x, mu = 0)    # test H0: mu = 0 
+    broom::tidy(test)     
+  })
+  
+ # Combine the result into data frame
+  results[[as.character(mu)]] = do.call(rbind, test_results)
+}
+
+for (mu in names(results)) {
+  cat("Results for mu =", mu, "\n")
+  print(head(results[[mu]]))  
+  cat("\n")
+  return(results)
+}
+
+```
+
+
+```{r}
+all_results = bind_rows(lapply(names(results), function(mu) {
+  df = results[[mu]]
+  df$true_mu = as.numeric(mu)
+  return(df)
+}), .id = "mu")
+# Calculate every mu-value
+power_data = all_results |>
+  group_by(true_mu) |>
+  summarise(power = mean(p.value < alpha))
+
+ggplot(power_data, aes(x = true_mu, y = power)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Power vs Effect Size",
+       x = "True Value of Mu",
+       y = "Proportion of Rejected Null Hypotheses (Power)") +
+  theme_minimal()
+```
+
+As the value of mu increases, the power rises, showing that larger effect sizes increase the likelihood of rejecting the null hypothesis. 
+
+
+
+```{r}
+
+# Calculate average mu
+estimate_data = all_results |>
+  group_by(true_mu) |>
+  summarise(
+    avg_estimate = mean(estimate),
+    avg_estimate_rejected = mean(estimate[p.value < alpha])
+  )
+
+
+ggplot(estimate_data, aes(x = true_mu)) +
+  geom_line(aes(y = avg_estimate), color = "black", linetype = "solid", linewidth = 1) +
+  geom_point(aes(y = avg_estimate), color = "black") +
+  geom_line(aes(y = avg_estimate_rejected), color = "red", linetype = "dashed", linewidth = 1) +
+  geom_point(aes(y = avg_estimate_rejected), color = "red") +
+  labs(title = "Average Estimate of Mu vs True Value of Mu",
+       x = "True Value of Mu",
+       y = "Average Estimate of Mu") +
+  theme_minimal()
+```
+
+An improvement in estimation accuracy with larger values of mu.
+
+### Q3
+
+```{r}
+homicides = read.csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/refs/heads/master/homicide-data.csv")
+
+# examine the first few rows of the data to understand the structure
+head(homicides)
+str(homicides)
+```
+
+```{r}
+homicides = homicides |>
+  mutate(city_state = paste(city, state, sep = ", ")) |>
+  group_by(city_state) |>
+  summarize(
+    total_homicides = n(),
+    unsolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  )
+```
+
+```{r}
+# filter for Baltimore, MD
+baltimore_data = homicides |>
+  filter(city_state == "Baltimore, MD")
+
+# Conduct proportion test
+baltimore_prop_test = prop.test(
+  x = baltimore_data$unsolved_homicides,
+  n = baltimore_data$total_homicides
+)
+
+# Tidy the output and extract relevant information
+baltimore_summary = broom::tidy(baltimore_prop_test) %>%
+  select(estimate, conf.low, conf.high)
+baltimore_summary
+```
+
+
+```{r}
+city_proportions = homicides |>
+  mutate(
+    prop_test = map2(unsolved_homicides, total_homicides, ~ prop.test(.x, .y)),
+    tidy_test = map(prop_test, broom::tidy)
+  ) |>
+  unnest(tidy_test) |>
+  select(city_state, estimate, conf.low, conf.high)
+print(city_proportions)
+```
+
+```{r}
+# Arrange cities by the proportion estimate
+city_proportions = city_proportions |>
+  arrange(desc(estimate)) |>
+  mutate(city_state = factor(city_state, levels = unique(city_state)))
+
+ggplot(city_proportions, aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Proportion of Unsolved Homicides by City",
+    x = "City",
+    y = "Proportion of Unsolved Homicides"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 4)      # Adjust the text size of y-axis.
+  )
+```
+Some cities like Chicago, IL, Baltimore, MD, and New Orleans, LA have particularly high proportions of unsolved cases. However, some cities, such as Tulsa, AL, has a relatively lower rate of unsolved homicides.
